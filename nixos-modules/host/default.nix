@@ -119,6 +119,14 @@ in
               Defaults to true for fully-declarative MicroVMs.
             '';
           };
+
+          unbindPciDevices = mkOption {
+            type = types.bool;
+            default = true;
+            description = ''
+              Unbind drivers of specified PCI devices when starting VM.
+            '';
+          };
         };
       }));
       default = {};
@@ -258,6 +266,9 @@ in
         serviceConfig.X-RestartIfChanged = [ "" microvmConfig.restartIfChanged ];
         path = lib.mkForce [];
         overrideStrategy = "asDropin";
+        environment = {
+          "UNBIND_PCI_DEVICES" = if microvmConfig.unbindPciDevices then "1" else "0";
+        };
       };
       "microvm-virtiofsd@${name}" = {
         serviceConfig.X-RestartIfChanged = [ "" microvmConfig.restartIfChanged ];
@@ -366,16 +377,22 @@ in
         scriptArgs = "%i";
         script = ''
           cd ${stateDir}/$1
+          if [[ $UNBIND_PCI_DEVICES -eq 0 ]]; then
+            echo "Skipping pci device driver unbinding"
+          fi
 
           ${pkgs.kmod}/bin/modprobe vfio-pci
 
           for path in $(cat current/share/microvm/pci-devices); do
             pushd /sys/bus/pci/devices/$path
-            if [ -e driver ]; then
-              echo $path > driver/unbind
+
+            if [[ $UNBIND_PCI_DEVICES -eq 1 ]]; then
+              if [ -e driver ]; then
+                echo $path > driver/unbind
+              fi
+              echo vfio-pci > driver_override
+              echo $path > /sys/bus/pci/drivers_probe
             fi
-            echo vfio-pci > driver_override
-            echo $path > /sys/bus/pci/drivers_probe
 
             # In order to access the vfio dev the permissions must be set
             # for the user/group running the VMM later.
