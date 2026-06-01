@@ -158,6 +158,13 @@
               Defaults to true for fully-declarative MicroVMs.
             '';
           };
+          unbindPciDevices = mkOption {
+            type = types.bool;
+            default = true;
+            description = ''
+              Unbind drivers of specified PCI devices when starting VM.
+            '';
+          };
         };
       }));
       default = {};

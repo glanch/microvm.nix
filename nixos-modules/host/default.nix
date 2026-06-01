@@ -142,6 +142,9 @@ in
         serviceConfig.X-RestartIfChanged = [ "" microvmConfig.restartIfChanged ];
         path = lib.mkForce [];
         overrideStrategy = "asDropin";
+        environment = {
+          "UNBIND_PCI_DEVICES" = if microvmConfig.unbindPciDevices then "1" else "0";
+        };
       };
       "microvm-virtiofsd@${name}" = {
         serviceConfig.X-RestartIfChanged = [ "" microvmConfig.restartIfChanged ];

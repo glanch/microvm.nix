@@ -16,11 +16,17 @@ in
     ${pkgs.kmod}/bin/modprobe vfio-pci
   '' + lib.concatMapStrings ({ path, ... }: ''
     cd /sys/bus/pci/devices/${path}
-    if [ -e driver ]; then
-      echo ${path} > driver/unbind
+    if [[ $UNBIND_PCI_DEVICES -eq 0 ]]; then
+      echo "Skipping pci device driver unbinding"
     fi
-    echo vfio-pci > driver_override
-    echo ${path} > /sys/bus/pci/drivers_probe
+    if [[ $UNBIND_PCI_DEVICES -eq 1 ]]; then
+      if [ -e driver ]; then
+        echo ${path} > driver/unbind
+      fi
+      echo vfio-pci > driver_override
+      echo ${path} > /sys/bus/pci/drivers_probe
+
+    fi
   '' +
   # In order to access the vfio dev the permissions must be set
   # for the user/group running the VMM later.
