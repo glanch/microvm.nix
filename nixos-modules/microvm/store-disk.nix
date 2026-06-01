@@ -5,36 +5,47 @@ let
     rootPaths = [ config.system.build.toplevel ];
   };
 
-  kernelAtLeast = lib.versionAtLeast config.boot.kernelPackages.kernel.version;
+  erofs-utils =
+    # Are any extended options specified?
+    if lib.any (with lib; flip elem ["-Ededupe" "-Efragments"]) config.microvm.storeDiskErofsFlags
+    then
+      # If extended options are present,
+      # stick to the single-threaded erofs-utils
+      # to not scare anyone with warning messages.
+      pkgs.buildPackages.erofs-utils
+    else
+      # If no extended options are configured,
+      # rebuild mkfs.erofs with multi-threading.
+      pkgs.buildPackages.erofs-utils.overrideAttrs (attrs: {
+        configureFlags = attrs.configureFlags ++ [
+          "--enable-multithreading"
+        ];
+      });
 
-  erofsFlags = builtins.concatStringsSep " " (
-    [ "-zlz4hc" ]
-    # ++
-    # lib.optional (kernelAtLeast "5.13") "-C1048576"
+  erofsFlags = builtins.concatStringsSep " " config.microvm.storeDiskErofsFlags;
+  squashfsFlags = builtins.concatStringsSep " " config.microvm.storeDiskSquashfsFlags;
+
+  mkfsCommand =
+    {
+      squashfs = "gensquashfs ${squashfsFlags} -D store --all-root -q $out";
+      erofs = "mkfs.erofs ${erofsFlags} -T 0 --all-root -L nix-store --mount-point=/nix/store $out store";
+    }.${config.microvm.storeDiskType};
+
+  writeClosure = pkgs.writeClosure or pkgs.writeReferencesToFile;
+
+  storeDiskContents = writeClosure (
+    [ config.system.build.toplevel ]
     ++
-    lib.optional (kernelAtLeast "5.16") "-Eztailpacking"
-    ++
-    lib.optionals (kernelAtLeast "6.1") [
-      "-Efragments"
-      # "-Ededupe"
-    ]
+    lib.optional config.nix.enable regInfo
   );
+
 in
 {
-  options.microvm = with lib; {
-    storeDiskType = mkOption {
-      type = types.enum [ "squashfs" "erofs" ];
-      description = ''
-        Boot disk file system type: squashfs is smaller, erofs is supposed to be faster.
-      '';
-    };
-
-    storeDisk = mkOption {
-      type = types.path;
-      description = ''
-        Generated
-      '';
-    };
+  options.microvm.storeDisk = with lib; mkOption {
+    type = types.path;
+    description = ''
+      Generated
+    '';
   };
 
   config = lib.mkMerge [
@@ -53,38 +64,38 @@ in
         config.microvm.storeDiskType
       ];
 
-      microvm.storeDisk = pkgs.runCommandLocal "microvm-store-disk.${config.microvm.storeDiskType}" {
-        nativeBuildInputs = with pkgs.buildPackages; [ {
-          squashfs = [ squashfs-tools-ng ];
-          erofs = [ erofs-utils ];
-        }.${config.microvm.storeDiskType} ];
+      microvm.storeDisk = pkgs.buildPackages.runCommandLocal "microvm-store-disk.${config.microvm.storeDiskType}" {
+        nativeBuildInputs = [
+          pkgs.buildPackages.time
+          pkgs.buildPackages.bubblewrap
+          {
+            squashfs = pkgs.buildPackages.squashfs-tools-ng;
+            erofs = erofs-utils;
+          }.${config.microvm.storeDiskType}
+        ];
         passthru = {
           inherit regInfo;
         };
+        __structuredAttrs = true;
+        unsafeDiscardReferences.out = true;
       } ''
-        echo Copying a /nix/store
         mkdir store
-        for d in $(sort -u ${
-          lib.concatMapStringsSep " " pkgs.writeReferencesToFile (
-            lib.optionals config.microvm.storeOnDisk (
-              [ config.system.build.toplevel ]
-              ++
-              lib.optional config.nix.enable regInfo
-            )
-          )
-        }); do
-          cp -a $d store
+        BWRAP_ARGS="--dev-bind / / --chdir $(pwd)"
+        for d in $(sort -u ${storeDiskContents}); do
+          BWRAP_ARGS="$BWRAP_ARGS --ro-bind $d $(pwd)/store/$(basename $d)"
         done
 
         echo Creating a ${config.microvm.storeDiskType}
-        ${{
-          squashfs = "gensquashfs -D store --all-root -c zstd -q $out";
-          erofs = "mkfs.erofs ${erofsFlags} -L nix-store --mount-point=/nix/store $out store";
-        }.${config.microvm.storeDiskType}}
+        bwrap $BWRAP_ARGS -- time ${mkfsCommand} || \
+          (
+            echo "Bubblewrap failed. Falling back to copying...">&2
+            cp -a $(sort -u ${storeDiskContents}) store/
+            time ${mkfsCommand}
+          )
       '';
     })
 
-    (lib.mkIf (config.microvm.guest.enable && config.nix.enable) {
+    (lib.mkIf (config.microvm.registerClosure && config.nix.enable) {
       microvm.kernelParams = [
         "regInfo=${regInfo}/registration"
       ];

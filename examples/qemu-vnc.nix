@@ -16,7 +16,7 @@ nixpkgs.lib.nixosSystem {
     # this runs as a MicroVM
     self.nixosModules.microvm
 
-    ({ config, lib, pkgs, ... }: {
+    ({ lib, pkgs, ... }: {
       microvm = {
         hypervisor = "qemu";
         graphics.enable = true;
@@ -28,7 +28,7 @@ nixpkgs.lib.nixosSystem {
       };
 
       networking.hostName = "qemu-vnc";
-      system.stateVersion = config.system.nixos.version;
+      system.stateVersion = lib.trivial.release;
 
       microvm.qemu.extraArgs = [
         "-vnc" ":0"
@@ -58,7 +58,7 @@ nixpkgs.lib.nixosSystem {
         displayManager.autoLogin.user = "user";
       };
 
-      hardware.opengl.enable = true;
+      hardware.graphics.enable = true;
 
       environment.systemPackages = with pkgs; [
         xdg-utils # Required

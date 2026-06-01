@@ -14,7 +14,7 @@ MicroVM deployments using the information on this page.
 | `microvm.devices.*.path`     | `share/microvm/pci-devices`            | `microvm-pci-devices@.service`      | PCI devices that must be bound to the **vfio-pci** driver on the host                         |
 | `microvm.shares.*.source`    | `share/microvm/virtiofs/${tag}/source` | `microvm-virtiofsd@.service`        | Source directory of a **virtiofs** instance by tag                                            |
 | `microvm.shares.*.socket`    | `share/microvm/virtiofs/${tag}/socket` | `microvm-virtiofsd@.service`        | **virtiofsd** socket path by tag                                                              |
-|                              | `share/microvm/system`                 |                                     | `config.system.build.toplevel` symlink, used for comparing versions when running `microvm -l` |
+| `microvm.systemSymlink`      | `share/microvm/system`                 |                                     | `config.system.build.toplevel` symlink, used for comparing versions when running `microvm -l` |
 
 
 ## Generating custom operating system hypervisor packages
@@ -31,5 +31,5 @@ virtualize other operating systems than NixOS.
 - The runner package must have a file layout as described in the table
   above.
 
-[microvm-solo5-spt](https://github.com/astro/microvm-solo5-spt) is an
+[microvm-solo5-spt](https://github.com/microvm-nix/microvm-solo5-spt) is an
 example of a Flake that can run on a microvm.nix host.

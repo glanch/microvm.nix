@@ -10,7 +10,7 @@ nixpkgs.lib.nixosSystem {
     # this runs as a MicroVM that nests MicroVMs
     self.nixosModules.microvm
 
-    ({ config, lib, pkgs, ... }:
+    ({ config, lib, ... }:
       let
         inherit (self.lib) hypervisors;
 
@@ -35,16 +35,19 @@ nixpkgs.lib.nixosSystem {
 
       in {
         networking.hostName = "microvms-host";
-        system.stateVersion = config.system.nixos.version;
+        system.stateVersion = lib.trivial.release;
         users.users.root.password = "";
         users.motd = ''
           Once nested MicroVMs have booted you can look up DHCP leases:
           networkctl status virbr0
 
-          They are configured to allow SSH login with an empty root
-          password.
+          They are configured to allow SSH login with root password:
+          toor
         '';
         services.getty.autologinUser = "root";
+
+        # Make alioth available
+        nixpkgs.overlays = [ self.overlay ];
 
         # MicroVM settings
         microvm = {
@@ -63,7 +66,7 @@ nixpkgs.lib.nixosSystem {
         # Nested MicroVMs (a *host* option)
         microvm.vms = builtins.mapAttrs (hypervisor: mac: {
           config = {
-            system.stateVersion = config.system.nixos.version;
+            system.stateVersion = lib.trivial.release;
             networking.hostName = "${hypervisor}-microvm";
 
             microvm = {
@@ -77,7 +80,7 @@ nixpkgs.lib.nixosSystem {
             # Just use 99-ethernet-default-dhcp.network
             systemd.network.enable = true;
 
-            users.users.root.password = "";
+            users.users.root.password = "toor";
             services.openssh = {
               enable = true;
               settings.PermitRootLogin = "yes";
@@ -95,9 +98,9 @@ nixpkgs.lib.nixosSystem {
             matchConfig.Name = "virbr0";
 
             addresses = [ {
-              addressConfig.Address = "10.0.0.1/24";
+              Address = "10.0.0.1/24";
             } {
-              addressConfig.Address = "fd12:3456:789a::1/64";
+              Address = "fd12:3456:789a::1/64";
             } ];
             # Hand out IP addresses to MicroVMs.
             # Use `networkctl status virbr0` to see leases.
@@ -107,14 +110,12 @@ nixpkgs.lib.nixosSystem {
             };
             # Let DHCP assign a statically known address to the VMs
             dhcpServerStaticLeases = lib.imap0 (i: hypervisor: {
-              dhcpServerStaticLeaseConfig = {
-                MACAddress = hypervisorMacAddrs.${hypervisor};
-                Address = hypervisorIPv4Addrs.${hypervisor};
-              };
+              MACAddress = hypervisorMacAddrs.${hypervisor};
+              Address = hypervisorIPv4Addrs.${hypervisor};
             }) hypervisors;
             # IPv6 SLAAC
             ipv6Prefixes = [ {
-              ipv6PrefixConfig.Prefix = "fd12:3456:789a::/64";
+              Prefix = "fd12:3456:789a::/64";
             } ];
           };
           networks.microvm-eth0 = {
@@ -122,18 +123,19 @@ nixpkgs.lib.nixosSystem {
             networkConfig.Bridge = "virbr0";
           };
         };
-        # Allow DHCP server
-        networking.firewall.allowedUDPPorts = [ 67 ];
-        # Allow Internet access
-        networking.nat = {
-          enable = true;
-          enableIPv6 = true;
-          internalInterfaces = [ "virbr0" ];
+        networking = {
+          extraHosts = lib.concatMapStrings (hypervisor: ''
+            ${hypervisorIPv4Addrs.${hypervisor}} ${hypervisor}
+          '') hypervisors;
+          # Allow DHCP server
+          firewall.allowedUDPPorts = [ 67 ];
+          # Allow Internet access
+          nat = {
+            enable = true;
+            enableIPv6 = true;
+            internalInterfaces = [ "virbr0" ];
+          };
         };
-
-        networking.extraHosts = lib.concatMapStrings (hypervisor: ''
-          ${hypervisorIPv4Addrs.${hypervisor}} ${hypervisor}
-        '') hypervisors;
       })
   ];
 }

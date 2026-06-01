@@ -1,7 +1,7 @@
 { config, lib, ... }:
 let
-
   inherit (config.networking) hostName;
+
 in
 lib.mkIf config.microvm.guest.enable {
   assertions =
@@ -105,11 +105,23 @@ lib.mkIf config.microvm.guest.enable {
       message = ''
         MicroVM ${hostName}: `config.microvm.forwardPorts` works only with qemu and one network interface with `type = "user"`
       '';
+    } ]
+    ++
+    # cloud-hypervisor specific asserts
+    lib.optionals (config.microvm.hypervisor == "cloud-hypervisor") [ {
+      assertion = ! (lib.any (str: lib.hasInfix "oem_strings" str) config.microvm.cloud-hypervisor.platformOEMStrings);
+      message = ''
+        MicroVM ${hostName}: `config.microvm.cloud-hypervisor.platformOEMStrings` items must not contain `oem_strings`
+      '';
     } ];
+
 
   warnings =
     # 32 MB is just an optimistic guess, not based on experience
     lib.optional (config.microvm.mem < 32) ''
       MicroVM ${hostName}: ${toString config.microvm.mem} MB of RAM is uncomfortably narrow.
+    ''
+    ++ lib.optional config.nix.optimise.automatic ''
+      Optimising the nix store is not recommended as it either uses lots of file handles with virtiofsd or as it doesn't do what you expect with a block device.
     '';
 }

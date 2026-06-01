@@ -1,6 +1,23 @@
 { self, nixpkgs, system }:
 
 let
+  inherit (nixpkgs) lib;
+
+  # Platform filtering for hypervisors
+  hypervisorsDarwinOnly = [ "vfkit" ];
+  hypervisorsOnDarwin = [ "qemu" "vfkit" ];
+  isDarwinOnly = hypervisor: builtins.elem hypervisor hypervisorsDarwinOnly;
+  isDarwinSystem = s: lib.hasSuffix "-darwin" s;
+  hypervisorSupportsSystem = hypervisor: s:
+    if isDarwinSystem s
+    then builtins.elem hypervisor hypervisorsOnDarwin
+    else !(isDarwinOnly hypervisor);
+
+  # Filter hypervisors to only those that support the current system
+  supportedHypervisors = builtins.filter
+    (hv: hypervisorSupportsSystem hv system)
+    self.lib.hypervisors;
+
   variants = [
     # hypervisor
     [ {
@@ -46,6 +63,11 @@ let
       id = "kvmtool";
       modules = [ {
         microvm.hypervisor = "kvmtool";
+      } ];
+    } {
+      id = "alioth";
+      modules = [ {
+        microvm.hypervisor = "alioth";
       } ];
     } ]
     # ro-store
@@ -110,6 +132,39 @@ let
         imports = [ "${modulesPath}/profiles/hardened.nix" ];
       }) ];
     } ]
+
+    [ {
+      # no
+      id = null;
+    } {
+      id = "credentials";
+      modules = [ ({ config, pkgs, ... }: {
+        # This is the guest vm config
+        microvm = {
+          credentialFiles.SECRET_BOOTSTRAP_KEY = "/etc/microvm-bootstrap.secret";
+          testing.enableTest = builtins.elem config.microvm.hypervisor [
+            # Hypervisors that support systemd credentials
+            "qemu"
+          ];
+        };
+        # TODO: need to somehow have the test harness check for the success or failure of this service.
+        systemd.services.test-secret-availability = {
+          serviceConfig = {
+            ImportCredential = "SECRET_BOOTSTRAP_KEY";
+            Restart = "no";
+          };
+          path = [ pkgs.gnugrep pkgs.coreutils ];
+          script = ''
+            cat $CREDENTIALS_DIRECTORY/SECRET_BOOTSTRAP_KEY | grep -q "i am super secret"
+            if [ $? -ne 0 ]; then
+              echo "Secret not found at $CREDENTIALS_DIRECTORY/SECRET_BOOTSTRAP_KEY"
+              exit 1
+            fi
+          '';
+        };
+      }) ];
+    } ]
+
   ];
 
   allVariants =
@@ -171,7 +226,8 @@ let
 
 in
 import ./shellcheck.nix args //
-
+import ./microvm-command.nix args //
+import ./imperative-template.nix args //
 import ./startup-shutdown.nix args //
 import ./shutdown-command.nix args //
 
@@ -183,5 +239,6 @@ builtins.foldl' (result: hypervisor:
   in
     result //
     import ./vm.nix args //
-    import ./iperf.nix args
-) {} self.lib.hypervisors
+    import ./iperf.nix args //
+    import ./machined.nix args
+) {} supportedHypervisors

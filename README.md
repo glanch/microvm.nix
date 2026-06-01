@@ -2,21 +2,23 @@
 
 <p align="center">
   <strong>Handbook:</strong>
-  <a href="https://astro.github.io/microvm.nix/">HTML</a>
+  <a href="https://microvm-nix.github.io/microvm.nix/">HTML</a>
   <a href="doc/src/SUMMARY.md">Markdown</a>
   •
-  <strong><a href="https://matrix.to/#/#microvm.nix:envs.net">Matrix chat</a></strong>
+  <strong><a href="https://matrix.to/#/#microvm:nixos.org">Matrix chat</a></strong>
   •
   <strong><a href="./CHANGELOG.md">Changelog</a></strong>
   •
-  <strong><a href="https://github.com/sponsors/astro">Support the project</a></strong>
+  <sup><a href="https://gradient.wavelens.io/organization/microvm-nix/project/packages">
+    <img src="https://gradient.wavelens.io/api/v1/projects/microvm-nix/packages/badge" alt="Gradient Badge" align="middle">
+  </a></sup>
 </p>
 <p align="center">
   <img src="doc/src/demo.gif" alt="Demo GIF">
 </p>
 
 A Nix Flake to build NixOS and run it on one of several Type-2
-Hypervisors on NixOS/Linux. The project is intended to provide a more
+Hypervisors on NixOS/Linux or macOS. The project is intended to provide a more
 isolated alternative to `nixos-container`. You can either build and
 run MicroVMs like Nix packages, or alternatively install them as
 systemd services declaratively in your host's Nix Flake or
@@ -28,8 +30,8 @@ imperatively with the provided `microvm` command.
 
 - MicroVMs are Virtual Machines but use special device interfaces
   (virtio) for high performance.
-- This project runs them on NixOS hosts.
-- You can choose one of five hypervisors for each MicroVM.
+- This project runs them on NixOS/Linux hosts and macOS (via vfkit).
+- You can choose from eight hypervisors for each MicroVM.
 - MicroVMs have a fixed RAM allocation (default: 512 MB) but can be
   shrunk using `microvm-balloon`
 - MicroVMs have a read-only root disk with either a prepopulated
@@ -42,29 +44,33 @@ imperatively with the provided `microvm` command.
   a block device, or alternatively as a shared directory hierarchy
   through *9p* or *virtiofs*.
 - Zero, one, or more virtual tap ethernet network interfaces can be
-  attached to a MicroVM. `qemu` and `kvmtool` also support *user*
+  attached to a MicroVM. `qemu`, `kvmtool`, and `vfkit` also support *user*
   networking which requires no additional setup on the host.
+- For high-throughput TAP networking with `qemu`, enable `tap.vhost = true`
+  to use vhost-net kernel acceleration (~10 Gbps vs ~1.5 Gbps without).
 
 ## Hypervisors
 
-| Hypervisor                                                              | Language | Restrictions                             |
-|-------------------------------------------------------------------------|----------|------------------------------------------|
-| [qemu](https://www.qemu.org/)                                           | C        |                                          |
-| [cloud-hypervisor](https://www.cloudhypervisor.org/)                    | Rust     | no 9p shares                             |
-| [firecracker](https://firecracker-microvm.github.io/)                   | Rust     | no 9p/virtiofs shares                    |
-| [crosvm](https://chromium.googlesource.com/chromiumos/platform/crosvm/) | Rust     | 9p shares broken                         |
-| [kvmtool](https://github.com/kvmtool/kvmtool)                           | C        | no virtiofs shares, no control socket    |
-| [stratovirt](https://github.com/openeuler-mirror/stratovirt)            | Rust     | no 9p/virtiofs shares, no control socket |
+| Hypervisor                                                              | Language | Restrictions                                          |
+|-------------------------------------------------------------------------|----------|-------------------------------------------------------|
+| [qemu](https://www.qemu.org/)                                           | C        |                                                       |
+| [cloud-hypervisor](https://www.cloudhypervisor.org/)                    | Rust     | no 9p shares                                          |
+| [firecracker](https://firecracker-microvm.github.io/)                   | Rust     | no 9p/virtiofs shares                                 |
+| [crosvm](https://github.com/google/crosvm) | Rust     | 9p shares broken                                      |
+| [kvmtool](https://github.com/kvmtool/kvmtool)                           | C        | no virtiofs shares, no control socket                 |
+| [stratovirt](https://github.com/openeuler-mirror/stratovirt)            | Rust     | no 9p/virtiofs shares, no control socket              |
+| [alioth](https://github.com/google/alioth)                              | Rust     | no virtiofs shares, no control socket                 |
+| [vfkit](https://github.com/crc-org/vfkit)                               | Go       | macOS only, no 9p shares, no tap/bridge networking    |
 
 
 ## Installation
 
 ```shell
-nix registry add microvm github:astro/microvm.nix
+nix registry add microvm github:microvm-nix/microvm.nix
 ```
 
 (If you do not want to inflict this change on your system, just
-replace `microvm` with `github:astro/microvm.nix` in the following
+replace `microvm` with `github:microvm-nix/microvm.nix` in the following
 examples.)
 
 ## Start writing your own NixOS MicroVM definitions
@@ -86,6 +92,9 @@ nix run microvm#cloud-hypervisor-example
 nix run microvm#crosvm-example
 nix run microvm#kvmtool-example
 nix run microvm#stratovirt-example
+
+# On macOS only:
+nix run microvm#vfkit-example
 ```
 
 ### Run a MicroVM example with nested MicroVMs on 5 different Hypervisors
@@ -97,17 +106,20 @@ nix run microvm#vm
 Check `networkctl status virbr0` for the DHCP leases of the nested
 MicroVMs. They listen for ssh with an empty root password.
 
-### Experimental: run graphical applications in cloud-hypervisor with Wayland forwarding
+### Experimental: run graphical applications with graphics support
 
+On Linux with cloud-hypervisor and Wayland forwarding:
 ```shell
 nix run microvm#graphics neverball
 ```
 
+On macOS with vfkit, enable graphics with `microvm.graphics.enable = true`.
+
 ## Commercial support
 
-Accelerate your operations and secure your infrastructure with support
-from the maker of microvm.nix and a team of virtualization
-experts. Contact Cyberus Technology: <https://www.cyberus-technology.de/contact>
+Accelerate your operations and secure your infrastructure with support from a
+team of virtualization experts. Contact Cyberus Technology:
+<https://www.cyberus-technology.de/contact>
 
 ---
 

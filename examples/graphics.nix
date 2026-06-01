@@ -10,7 +10,7 @@ nixpkgs.lib.nixosSystem {
     # this runs as a MicroVM
     self.nixosModules.microvm
 
-    ({ config, lib, pkgs, ... }: {
+    ({ lib, pkgs, ... }: {
       microvm = {
         hypervisor = "cloud-hypervisor";
         graphics.enable = true;
@@ -22,7 +22,7 @@ nixpkgs.lib.nixosSystem {
       };
 
       networking.hostName = "graphical-microvm";
-      system.stateVersion = config.system.nixos.version;
+      system.stateVersion = lib.trivial.release;
       nixpkgs.overlays = [ self.overlay ];
 
       services.getty.autologinUser = "user";
@@ -69,7 +69,7 @@ nixpkgs.lib.nixosSystem {
           package != ""
         ) (lib.splitString " " packages));
 
-      hardware.opengl.enable = true;
+      hardware.graphics.enable = true;
     })
   ];
 }

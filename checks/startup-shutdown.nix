@@ -1,4 +1,4 @@
-{ self, nixpkgs, system, makeTestConfigs }:
+{ nixpkgs, system, makeTestConfigs, ... }:
 
 let
   pkgs = nixpkgs.legacyPackages.${system};
@@ -33,6 +33,7 @@ let
                 cloud-hypervisor = "poweroff";
                 crosvm = "reboot";
                 kvmtool = "reboot";
+                alioth = "poweroff";
               }.${config.microvm.hypervisor};
             in ''
               ${pkgs.coreutils}/bin/uname > /output/kernel-name

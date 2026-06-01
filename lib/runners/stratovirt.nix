@@ -1,20 +1,24 @@
 { pkgs
 , microvmConfig
 , macvtapFds
+, withDriveLetters
+, ...
 }:
 
 let
-  inherit (pkgs) lib system;
+  inherit (pkgs) lib;
+  inherit (pkgs.stdenv.hostPlatform) system;
+
+  stratovirtPkg = microvmConfig.stratovirt.package;
 
   inherit (microvmConfig)
     hostName
-    vcpu mem interfaces shares socket forwardPorts devices
-    kernel initrdPath
+    vcpu mem balloon initialBalloonMem hotplugMem hotpluggedMem interfaces shares socket forwardPorts devices
+    kernel initrdPath credentialFiles
     storeOnDisk storeDisk;
 
   tapMultiQueue = vcpu > 1;
 
-  inherit (import ../. { nixpkgs-lib = pkgs.lib; }) withDriveLetters;
   volumes = withDriveLetters microvmConfig;
 
   # PCI required by vfio-pci for PCI passthrough
@@ -37,8 +41,8 @@ let
     if requirePci
     then
       if addr < 32
-      then "pci,bus=pcie.0,addr=0x${pkgs.lib.toHexString addr}"
-      else throw "Too big PCI addr: ${pkgs.lib.toHexString addr}"
+      then "pci,bus=pcie.0,addr=0x${lib.toHexString addr}"
+      else throw "Too big PCI addr: ${lib.toHexString addr}"
     else "device";
 
   enumerate = n: xs:
@@ -48,15 +52,18 @@ let
       (builtins.head xs // { index = n; })
     ] ++ (enumerate (n + 1) (builtins.tail xs));
 
+  virtioblkOffset = 4;
+  virtiofsOffset = virtioblkOffset + builtins.length microvmConfig.volumes;
+
   forwardPortsOptions =
       let
         forwardingOptions = lib.flip lib.concatMapStrings forwardPorts
           ({ proto, from, host, guest }:
             if from == "host"
               then "hostfwd=${proto}:${host.address}:${toString host.port}-" +
-                   "${guest.address}:${toString guest.port},"
+                "${guest.address}:${toString guest.port},"
               else "guestfwd=${proto}:${guest.address}:${toString guest.port}-" +
-                   "cmd:${pkgs.netcat}/bin/nc ${host.address} ${toString host.port},"
+                "cmd:${pkgs.netcat}/bin/nc ${host.address} ${toString host.port},"
           );
       in
       [ forwardingOptions ];
@@ -67,9 +74,20 @@ let
 in {
   inherit tapMultiQueue;
 
-  command = lib.escapeShellArgs (
+  command = if balloon
+    then throw "balloon not implemented for stratovirt"
+    else if initialBalloonMem != 0
+    then throw "initialBalloonMem not implemented for stratovirt"
+    else if hotplugMem != 0
+    then throw "stratovirt does not support hotplugMem"
+    else if hotpluggedMem != 0
+    then throw "stratovirt does not support hotpluggedMem"
+    else if credentialFiles != {}
+    then throw "stratovirt does not support credentialFiles"
+    else lib.escapeShellArgs (
     [
-      "${pkgs.stratovirt}/bin/stratovirt"
+      "${pkgs.expect}/bin/unbuffer"
+      "${stratovirtPkg}/bin/stratovirt"
       "-name" hostName
       "-machine" machine
       "-m" (toString mem)
@@ -77,26 +95,46 @@ in {
 
       "-kernel" "${kernel}/bzImage"
       "-initrd" initrdPath
-      "-append" "console=${console} edd=off reboot=t panic=-1 verbose ${toString microvmConfig.kernelParams}"
+      "-append" "console=${console} edd=off reboot=t panic=-1 ${toString microvmConfig.kernelParams}"
 
       "-serial" "stdio"
       "-object" "rng-random,id=rng,filename=/dev/random"
       "-device" "virtio-rng-${devType 1},rng=rng,id=rng_dev"
     ] ++
     lib.optionals storeOnDisk [
-      "-drive" "id=store,format=raw,readonly=on,file=${storeDisk},if=none,aio=io_uring"
+      "-drive" "id=store,format=raw,readonly=on,file=${storeDisk},if=none,aio=io_uring,direct=false"
       "-device" "virtio-blk-${devType 2},drive=store,id=blk_store"
     ] ++
     lib.optionals (socket != null) [ "-qmp" "unix:${socket},server,nowait" ] ++
-    builtins.concatMap ({ image, letter, ... }: [
-      "-drive" "id=vd${letter},format=raw,file=${image},aio=io_uring"
-      "-device" "virtio-blk-${devType 4},drive=vd${letter},id=blk_vd${letter}"
-    ]) volumes ++
+    builtins.concatMap ({ index, image, letter, serial, direct, readOnly, ... }: [
+      "-drive"
+      "id=vd${
+        letter
+      },format=raw,if=none,aio=io_uring,file=${
+        image
+      },direct=${
+        if direct then "on" else "off"
+      },readonly=${
+        if readOnly then "on" else "off"
+      }"
+      "-device"
+      "virtio-blk-${
+        devType (virtioblkOffset + index)
+      },drive=vd${
+        letter
+      },id=blk_vd${
+        letter
+      }${
+        lib.optionalString (serial != null) ",serial=${serial}"
+      }"
+    ]) (enumerate 0 volumes) ++
     lib.optionals (shares != []) (
-      builtins.concatMap ({ proto, index, socket, source, tag, ... }: {
+      builtins.concatMap ({ proto, index, socket, tag, ... }: {
         "virtiofs" = [
-          "-chardev" "socket,id=fs${toString index},path=${socket}"
-          "-device" "vhost-user-fs-${devType (5 + index)},chardev=fs${toString index},tag=${tag}"
+          "-chardev"
+          "socket,id=fs${toString index},path=${socket}"
+          "-device"
+          "vhost-user-fs-${devType (virtiofsOffset + index)},chardev=fs${toString index},tag=${tag},id=fs${toString index}"
         ];
       }.${proto}) (enumerate 0 shares)
     )

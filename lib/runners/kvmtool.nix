@@ -1,14 +1,17 @@
 { pkgs
 , microvmConfig
-, macvtapFds
+, ...
 }:
 
 let
   inherit (pkgs) lib;
+
+  kvmtoolPkg = microvmConfig.kvmtool.package;
+
   inherit (microvmConfig)
     hostName preStart user
-    vcpu mem balloonMem interfaces volumes shares devices vsock
-    kernel initrdPath
+    vcpu mem balloon initialBalloonMem hotplugMem hotpluggedMem interfaces volumes shares devices vsock
+    kernel initrdPath credentialFiles
     storeDisk storeOnDisk;
 in {
   preStart = ''
@@ -19,11 +22,19 @@ in {
   command =
     if user != null
     then throw "kvmtool will not change user"
+    else if initialBalloonMem != 0
+    then throw "kvmtool does not support initialBalloonMem"
+    else if hotplugMem != 0
+    then throw "kvmtool does not support hotplugMem"
+    else if hotpluggedMem != 0
+    then throw "kvmtool does not support hotpluggedMem"
+    else if credentialFiles != {}
+    then throw "kvmtool does not support credentialFiles"
     else builtins.concatStringsSep " " (
       [
-        "${pkgs.kvmtool}/bin/lkvm" "run"
+        "${kvmtoolPkg}/bin/lkvm" "run"
         "--name" (lib.escapeShellArg hostName)
-        "-m" (toString (mem + balloonMem))
+        "-m" (toString mem)
         "-c" (toString vcpu)
         "--console" "serial"
         "--rng"
@@ -36,15 +47,26 @@ in {
         "-d" (lib.escapeShellArg "${storeDisk},ro")
       ]
       ++
-      lib.optionals (balloonMem > 0) [ "--balloon" ]
+      lib.optionals balloon [ "--balloon" ]
       ++
-      builtins.concatMap ({ image, ... }:
-        [ "-d" (lib.escapeShellArg image) ]
+      builtins.concatMap ({ image, serial, direct, readOnly, ... }:
+        lib.warnIf (serial != null) ''
+          Volume serial is not supported for kvmtool
+        ''
+        [ "-d"
+          (lib.escapeShellArg "${image}${
+            lib.optionalString direct ",direct"
+          }${
+            lib.optionalString readOnly ",ro"
+          }")
+        ]
       ) volumes
       ++
-      builtins.concatMap ({ proto, source, tag, ... }:
+      builtins.concatMap ({ proto, source, tag, readOnly, ... }:
         if proto == "9p"
-        then [
+        then if readOnly then
+          throw "kvmtool does not support readonly 9p share"
+        else [
           "--9p" (lib.escapeShellArg "${source},${tag}")
         ] else throw "virtiofs shares not implemented for kvmtool"
       ) shares
@@ -80,6 +102,6 @@ in {
     else
       ARGS="-i $SIZE"
     fi
-    HOME=$PWD ${pkgs.kvmtool}/bin/lkvm balloon $ARGS -n ${hostName}
+    HOME=$PWD ${kvmtoolPkg}/bin/lkvm balloon $ARGS -n ${hostName}
   '';
 }

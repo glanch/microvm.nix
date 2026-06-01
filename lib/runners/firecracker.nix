@@ -1,16 +1,18 @@
 { pkgs
 , microvmConfig
-, macvtapFds
+, ...
 }:
 
 let
-  inherit (pkgs) lib system;
+  inherit (pkgs) lib;
+  inherit (pkgs.stdenv.hostPlatform) system;
   inherit (microvmConfig)
     hostName user socket preStart
-    vcpu mem
+    vcpu mem balloon initialBalloonMem hotplugMem hotpluggedMem
     interfaces volumes shares devices
     kernel initrdPath
-    storeDisk;
+    storeDisk credentialFiles vsock;
+  inherit (microvmConfig.firecracker) cpu;
 
   kernelPath = {
     x86_64-linux = "${kernel.dev}/vmlinux";
@@ -18,11 +20,11 @@ let
   }.${system};
 
   # Firecracker config, as JSON in `configFile`
-  config = {
+  baseConfig = {
     boot-source = {
       kernel_image_path = kernelPath;
       initrd_path = initrdPath;
-      boot_args = "console=ttyS0 noapic reboot=k panic=1 pci=off i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd ${toString microvmConfig.kernelParams}";
+      boot_args = "console=ttyS0,115200 reboot=k panic=1 i8042.noaux i8042.nomux i8042.nopnp i8042.dumbkbd ${toString microvmConfig.kernelParams}";
     };
     machine-config = {
       vcpu_count = vcpu;
@@ -36,14 +38,20 @@ let
       path_on_host = storeDisk;
       is_root_device = false;
       is_read_only = true;
-      io_engine = "Async";
-    } ] ++ map ({ image, ... }: {
-      drive_id = image;
-      path_on_host = image;
-      is_root_device = false;
-      is_read_only = false;
-      io_engine = "Async";
-    }) volumes;
+      io_engine = microvmConfig.firecracker.driveIoEngine;
+    } ] ++ map ({ image, serial, direct, readOnly, ... }:
+      lib.warnIf (serial != null) ''
+        Volume serial is not supported for firecracker
+      ''
+      lib.warnIf direct ''
+        Volume direct IO is not supported for firecracker
+      '' {
+        drive_id = image;
+        path_on_host = image;
+        is_root_device = false;
+        is_read_only = readOnly;
+        io_engine = microvmConfig.firecracker.driveIoEngine;
+      }) volumes;
     network-interfaces = map ({ type, id, mac, ... }:
       if type == "tap"
       then {
@@ -53,12 +61,23 @@ let
       }
       else throw "Network interface type ${type} not implemented for Firecracker"
     ) interfaces;
-    vsock = null;
+    vsock =
+      if vsock.cid != null then
+        {
+          guest_cid = vsock.cid;
+          uds_path = "notify.vsock";
+        }
+      else
+        null;
+  }
+  // lib.optionalAttrs (cpu != null) {
+    cpu-config = pkgs.writeText "cpu-config.json" (builtins.toJSON cpu);
   };
+  config = lib.recursiveUpdate baseConfig microvmConfig.firecracker.extraConfig;
 
-  configFile = pkgs.writeText "firecracker-${hostName}.json" (
-    builtins.toJSON config
-  );
+  configFile = pkgs.writers.writeJSON "firecracker-${hostName}.json" config;
+
+  firecrackerPkg = microvmConfig.firecracker.package;
 
 in {
   command =
@@ -68,15 +87,27 @@ in {
     then throw "9p/virtiofs shares not implemented for Firecracker"
     else if devices != []
     then throw "devices passthrough not implemented for Firecracker"
-    else lib.escapeShellArgs [
-      "${pkgs.firecracker}/bin/firecracker"
+    else if balloon
+    then throw "balloon not implemented for Firecracker"
+    else if initialBalloonMem != 0
+    then throw "initialBalloonMem not implemented for Firecracker"
+    else if hotplugMem != 0
+    then throw "hotplugMem not implemented for Firecracker"
+    else if hotpluggedMem != 0
+    then throw "hotpluggedMem not implemented for Firecracker"
+    else if credentialFiles != {}
+    then throw "credentialFiles are not implemented for Firecracker"
+    else lib.escapeShellArgs ([
+      "${firecrackerPkg}/bin/firecracker"
       "--config-file" configFile
       "--api-sock" (
         if socket != null
         then socket
         else throw "Firecracker must be configured with an API socket (option microvm.socket)!"
       )
-    ];
+    ]
+    ++ lib.optional (lib.versionAtLeast firecrackerPkg.version "1.13.0") "--enable-pci"
+    ++ microvmConfig.firecracker.extraArgs);
 
   preStart = ''
     ${preStart}
@@ -84,6 +115,9 @@ in {
     if [ -e '${socket}' ]; then
       mv '${socket}' '${socket}.old'
     fi
+  ''
+  + lib.optionalString (vsock.cid != null) ''
+    rm -f notify.vsock notify.vsock_*
   '';
 
   canShutdown = socket != null;
